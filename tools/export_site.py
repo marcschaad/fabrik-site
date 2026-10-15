@@ -14,6 +14,8 @@ What it does:
   2. Asks the Studio for exactly what "Download HTML" would save (window.FabrikStudioBuild).
   3. Makes it live-ready: Adobe Fonts kit -> cib4apc (the Studio carries a preview kit),
      no noindex. CNAME and robots.txt are left alone.
+  3b. Ships only what visitors see: hidden sections out of the markup, their text out of the embedded
+     state, unused colour themes dropped (prune()).
   4. Refuses to write anything that does not look like a complete site.
 
 Exit codes: 0 written, 3 unchanged (nothing to commit), 1 failed.
@@ -60,11 +62,53 @@ def make_live(html: str) -> str:
     return html
 
 
+KEEP_KEYS = {"id", "type", "hidden", "target", "side"}
+
+
+def _blank(o):
+    """Empty every string in a hidden section's content, keeping the structure (ids, list lengths) the page's data keys rely on."""
+    if isinstance(o, dict):
+        return {k: (v if k in KEEP_KEYS else _blank(v)) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_blank(x) for x in o]
+    return "" if isinstance(o, str) else o
+
+
+def prune(html: str) -> str:
+    """Ship only what visitors see (2026-10-14 audit): hidden sections leave the markup and their text leaves the embedded
+    state; colour themes no section wears leave the state (551 themes, ~118 KB, for 12 in use)."""
+    m = re.search(r'(<script type="application/json" id="site-state">)(.*?)(</script>)', html, re.S)
+    if not m:
+        return html
+    st = json.loads(m.group(2))
+    c = st.get("content", {})
+    for b in c.get("blocks", []):
+        if b.get("hidden"):
+            b.update(_blank(b))
+    for k in ("band", "work", "now", "ways", "principles"):
+        if isinstance(c.get(k), dict) and c[k].get("hidden"):
+            c[k] = _blank(c[k])
+    used = set((st.get("sectionScheme") or {}).values())
+    if st.get("schemes"):
+        st["schemes"] = [x for x in st["schemes"] if x.get("id") in used]
+    st.pop("schemeGen", None)
+    js = json.dumps(st, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
+    html = html[: m.start(2)] + js + html[m.end(2):]
+    # hidden sections and their menu links leave the markup. Only the page markup (<body> to </main>) is touched: the renderer's
+    # own scripts contain the same section strings.
+    a, z = html.find("<body>"), html.find("</main>")
+    if a < 0 or z < a:
+        return html
+    page = re.sub(r'<section id="[^"]+"[^>]*\shidden[\s>][\s\S]*?</section>', "", html[a:z])
+    page = re.sub(r'<a hidden [^>]*>[^<]*</a>', "", page)
+    return html[:a] + page + html[z:]
+
+
 def check(html: str) -> list:
     problems = []
     if len(html) < 100_000:
         problems.append(f"too small ({len(html)} bytes)")
-    for must in ('id="site-state"', 'className+=" fk-wait"', LIVE_KIT, "</html>"):
+    for must in ('id="site-state"', 'className+=" fk-wait"', LIVE_KIT, "</html>", 'property="og:image"', 'rel="icon"'):
         if must not in html:
             problems.append(f"missing {must}")
     # editor-only markers (the runtime itself mentions both names, so match the exact preview lines)
@@ -86,7 +130,7 @@ def main() -> int:
     if "state" not in draft:
         draft = {"state": draft, "updatedAt": 0}
 
-    html = make_live(asyncio.run(build(pathlib.Path(a.studio), draft)))
+    html = prune(make_live(asyncio.run(build(pathlib.Path(a.studio), draft))))
     problems = check(html)
     if problems:
         print("Not written, the export looks wrong: " + "; ".join(problems), file=sys.stderr)
