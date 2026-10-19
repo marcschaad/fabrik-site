@@ -3063,13 +3063,19 @@ transform or scale.</span></h1></div></section><section id="b-intro" class="tex 
     are in (and again on resize / font load). Optional: letters near the cursor swell (fine pointer only).
     Settings: state.heroBreath { on, min, max, period (s per breath), waves (across the widest line), cursor, swell, reach (em) }.
     Pauses when the hero is off screen or the tab is hidden. Reduced motion: no split, the style's own weight, still.
-    Studio preview: Arsenica can't load inside Claude, so the preview breathes in Fraunces (variable) as a stand-in. */
+    Studio preview: Arsenica can't load inside Claude, so the preview breathes in Fraunces (variable) as a stand-in.
+    Smooth pass (2026-10-19, Marc: "very tweaky looking"): every letter keeps its own resting slot and grows from its centre
+    (negative side margins), so no letter is ever pushed sideways by its neighbours; kerning is off, so two letters passing the
+    same weight don't snap together for a frame; weights are whole numbers (Chrome draws some fractional weights, e.g. 537.5, in
+    the wrong face); widths are measured every 10 units, and every unit wherever the font's width jumps; the cursor swell blends
+    toward the heaviest weight instead of clipping at it; the pointer glides (frame-rate independent); only changed letters are
+    written; re-measures are debounced into one. */
 !function (W) {
   var D = document; if (W.FabrikHeroBreath) return; W.FabrikHeroBreath = 1;
   var reduce = !!(W.matchMedia && W.matchMedia('(prefers-reduced-motion: reduce)').matches), EDIT = !!W.FABRIK_EDITOR;
   var DEF = { on: true, min: 100, max: 800, period: 7, waves: 1, cursor: false, swell: 300, reach: 2.5 };
-  var cfg = clone(DEF), S = null, raf = 0, visible = true, t0 = 0, ptr = null, pAmt = 0, rz = 0;
-  var SAMPLES = []; for (var w = 100; w <= 900; w += 50) SAMPLES.push(w);
+  var cfg = clone(DEF), S = null, raf = 0, visible = true, t0 = 0, last = 0, ptr = null, sp = null, pAmt = 0, rz = 0, mz = 0;
+  var SAMPLES = []; for (var w = 100; w <= 900; w += 10) SAMPLES.push(w);  /* every 10 units: a width curve that isn't straight between samples would nudge the centred line */
   function clone(o) { var r = {}; for (var k in o) r[k] = o[k]; return r; }
   function num(v, lo, hi, d) { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; }
   function read(st) {
@@ -3097,7 +3103,7 @@ transform or scale.</span></h1></div></section><section id="b-intro" class="tex 
       var sr = a.querySelector(':scope > .hb-sr'); if (sr) sr.remove();
       a.querySelectorAll('.hb-l').forEach(function (l) { l.replaceWith(D.createTextNode(l.textContent)); });
       a.querySelectorAll('[data-hb-word]').forEach(function (wd) { wd.removeAttribute('aria-hidden'); wd.removeAttribute('data-hb-word'); wd.style.whiteSpace = ''; });
-      a.removeAttribute('data-hb'); a.style.removeProperty('font-family'); a.normalize();
+      a.removeAttribute('data-hb'); a.style.removeProperty('font-family'); a.style.removeProperty('font-kerning'); a.style.removeProperty('font-variant-ligatures'); a.normalize();
     });
     S = null;
   }
@@ -3125,32 +3131,60 @@ transform or scale.</span></h1></div></section><section id="b-intro" class="tex 
         a.setAttribute('data-hb', '');
       }
       if (EDIT) a.style.setProperty('font-family', "'arsenica-variable','Fraunces',Georgia,serif", 'important');
+      /* Smooth pass: the browser shapes two neighbouring letters together whenever their weights happen to match, and the
+         font's kerning (R-A, T-H) snaps them closer for that frame. Letters in their own spans are unkerned the rest of
+         the time anyway, so kerning goes off for the whole accent: no pops. */
+      a.style.setProperty('font-kerning', 'none'); a.style.setProperty('font-variant-ligatures', 'none');
       a.querySelectorAll('.hb-l').forEach(function (l) { letters.push({ el: l, acc: a, ch: l.textContent }); });
     });
     S = { letters: letters, table: {}, rest: 500, base: 0 };
     return letters.length > 0;
   }
-  /* widths in em for each character at each sample weight, measured in the accent's own font, size, case and tracking */
+  /* widths in em for each character at each sample weight, measured in the accent's own font, size, case and tracking.
+     Smooth pass: a variable font can swap a letter for an alternate shape at a set weight (its width jumps). A coarse table
+     can't see that, the line's total width changes and the centred line lurches. So any interval whose width doesn't follow
+     its neighbours is re-measured every unit, and each letter gets its own sorted weight -> width list. */
+  function probe(box, list) {  /* list of [ch, wt]; one layout for the whole batch */
+    var els = list.map(function (q) { var p = D.createElement('span'); p.textContent = q[0]; if (q[1] !== 'rest') p.style.fontWeight = q[1]; p.style.display = 'inline-block'; box.appendChild(p); return p; });
+    var fs = S.fs0, out = els.map(function (p) { return p.getBoundingClientRect().width / fs; });
+    els.forEach(function (p) { p.remove(); });
+    return out;
+  }
   function measure() {
     if (!S || !S.letters.length) return;
     var a = S.letters[0].acc, cs = getComputedStyle(a), fs = parseFloat(cs.fontSize) || 1;
-    S.rest = parseFloat(cs.fontWeight) || 500;
+    S.rest = parseFloat(cs.fontWeight) || 500; S.fs0 = fs;
     S.base = (parseFloat(cs.letterSpacing) || 0) / fs;
     var box = D.createElement('span');
     box.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;white-space:pre;letter-spacing:0;pointer-events:none';
     a.appendChild(box);
-    var chars = {}, probes = [];
-    S.letters.forEach(function (L) { chars[L.ch] = 1; });
-    Object.keys(chars).forEach(function (ch) {
-      SAMPLES.forEach(function (wt) { var p = D.createElement('span'); p.textContent = ch; p.style.fontWeight = wt; p.style.display = 'inline-block'; box.appendChild(p); probes.push([ch, wt, p]); });
-      var r = D.createElement('span'); r.textContent = ch; r.style.display = 'inline-block'; box.appendChild(r); probes.push([ch, 'rest', r]);
+    var chars = {}; S.letters.forEach(function (L) { chars[L.ch] = 1; });
+    var list = [], T = {};
+    Object.keys(chars).forEach(function (ch) { SAMPLES.forEach(function (wt) { list.push([ch, wt]); }); list.push([ch, 'rest']); });
+    var v = probe(box, list);
+    list.forEach(function (q, i) { var t = T[q[0]] || (T[q[0]] = { w: [], v: [] }); if (q[1] === 'rest') t.rest = v[i]; else { t.w.push(q[1]); t.v.push(v[i]); } });
+    /* find the jumps: an interval whose step differs from both neighbours' by more than ~0.3px at this size */
+    var fine = [], TOL = 0.004;
+    Object.keys(T).forEach(function (ch) {
+      var t = T[ch], d = []; for (var i = 1; i < t.w.length; i++) d.push(t.v[i] - t.v[i - 1]);
+      d.forEach(function (x, i) {
+        var nb = []; if (i > 0) nb.push(d[i - 1]); if (i + 1 < d.length) nb.push(d[i + 1]);
+        var ref = nb.length ? nb.reduce(function (s, y) { return s + y; }, 0) / nb.length : x;
+        if (Math.abs(x - ref) > TOL) for (var w = t.w[i] + 1; w < t.w[i + 1]; w += 1) fine.push([ch, w]);
+      });
     });
-    var T = {};
-    probes.forEach(function (q) { var wd = q[2].getBoundingClientRect().width / fs; (T[q[0]] = T[q[0]] || {})[q[1]] = wd; });
+    if (fine.length) {
+      var fv = probe(box, fine);
+      fine.forEach(function (q, i) { var t = T[q[0]]; t.w.push(q[1]); t.v.push(fv[i]); });
+      Object.keys(T).forEach(function (ch) {
+        var t = T[ch], ix = t.w.map(function (_, i) { return i; }).sort(function (x, y) { return t.w[x] - t.w[y]; });
+        t.w = ix.map(function (i) { return t.w[i]; }); t.v = ix.map(function (i) { return t.v[i]; });
+      });
+    }
     box.remove();
-    S.table = T;
+    S.table = T; S.jumps = fine.length;
     /* rest state: every letter at the style's weight, default tracking; record line groups and centres */
-    S.letters.forEach(function (L) { L.el.style.fontWeight = ''; L.el.style.letterSpacing = ''; });
+    S.letters.forEach(function (L) { L.el.style.fontWeight = ''; L.el.style.letterSpacing = ''; L.el.style.marginInline = ''; L.q = null; });
     var lines = {}, minX = Infinity, maxX = -Infinity, h1 = a.closest('h1'), hr = h1.getBoundingClientRect();
     S.h1 = h1;
     S.letters.forEach(function (L) {
@@ -3166,36 +3200,42 @@ transform or scale.</span></h1></div></section><section id="b-intro" class="tex 
     S.fs = fs;
   }
   function widthAt(ch, wt) {
-    var t = S.table[ch]; if (!t) return 0;
-    if (wt <= SAMPLES[0]) return t[SAMPLES[0]];
-    for (var i = 1; i < SAMPLES.length; i++) {
-      var b = SAMPLES[i]; if (wt <= b) { var a = SAMPLES[i - 1], f = (wt - a) / (b - a); return t[a] + (t[b] - t[a]) * f; }
-    }
-    return t[SAMPLES[SAMPLES.length - 1]];
+    var t = S.table[ch]; if (!t || !t.w.length) return 0;
+    var w = t.w, v = t.v, n = w.length;
+    if (wt <= w[0]) return v[0]; if (wt >= w[n - 1]) return v[n - 1];
+    var lo = 0, hi = n - 1;
+    while (hi - lo > 1) { var m = (lo + hi) >> 1; if (w[m] <= wt) lo = m; else hi = m; }
+    if (wt === w[lo]) return v[lo];
+    return v[lo] + (v[hi] - v[lo]) * (wt - w[lo]) / (w[hi] - w[lo]);
   }
   function frame(now) {
     raf = 0; if (!S || !S.lines || !cfg.on) return;
     if (!t0) t0 = now;
-    var t = (now - t0) / 1000, mid = (cfg.min + cfg.max) / 2, amp = (cfg.max - cfg.min) / 2, TAU = Math.PI * 2;
-    pAmt += ((ptr && cfg.cursor ? 1 : 0) - pAmt) * 0.08;
-    var reachPx = cfg.reach * (S.fs || 80), hr = (pAmt > 0.002 && ptr && S.h1) ? S.h1.getBoundingClientRect() : null;
-    S.lines.forEach(function (line) {
-      var delta = 0;
-      line.forEach(function (L) {
-        var wt = mid + amp * Math.sin(TAU * t / cfg.period - TAU * cfg.waves * L.u);
-        if (hr) {
-          var dx = ptr.x - (hr.left + L.ox), dy = ptr.y - (hr.top + L.oy);
-          wt += cfg.swell * pAmt * Math.exp(-(dx * dx + dy * dy) / (reachPx * reachPx));
-        }
-        wt = Math.max(cfg.min, Math.min(Math.max(cfg.max, cfg.min), wt));
-        L.wt = wt; delta += widthAt(L.ch, wt) - L.restW;
-      });
-      var fix = S.base - delta / line.length;
-      line.forEach(function (L) { L.el.style.fontWeight = L.wt.toFixed(1); L.el.style.letterSpacing = fix.toFixed(4) + 'em'; });
+    var dt = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60; last = now;
+    var t = (now - t0) / 1000, TAU = Math.PI * 2, lo = cfg.min, hi = Math.max(cfg.max, cfg.min), rng = hi - lo;
+    /* the pointer glides and its presence fades in and out, at the same speed on any screen refresh rate */
+    var kPos = 1 - Math.exp(-dt / 0.16), kAmt = 1 - Math.exp(-dt / 0.4);
+    if (ptr) { if (!sp) sp = { x: ptr.x, y: ptr.y }; sp.x += (ptr.x - sp.x) * kPos; sp.y += (ptr.y - sp.y) * kPos; }
+    pAmt += ((ptr && cfg.cursor ? 1 : 0) - pAmt) * kAmt;
+    var reachPx = cfg.reach * (S.fs || 80), hr = (pAmt > 0.002 && sp && S.h1) ? S.h1.getBoundingClientRect() : null;
+    var sw = rng > 0 ? Math.min(1, cfg.swell / rng) : 0;
+    S.letters.forEach(function (L) {
+      var b = 0.5 + 0.5 * Math.sin(TAU * t / cfg.period - TAU * cfg.waves * L.u);
+      if (hr) {
+        var dx = sp.x - (hr.left + L.ox), dy = sp.y - (hr.top + L.oy);
+        /* swell blends toward the heaviest weight: it never hits a ceiling and flattens */
+        b = 1 - (1 - b) * (1 - sw * pAmt * Math.exp(-(dx * dx + dy * dy) / (reachPx * reachPx)));
+      }
+      var q = Math.round(lo + rng * b);  /* whole units: Chrome renders some fractional weights (537.5) in the wrong face */
+      if (q === L.q) return; L.q = q;
+      /* the letter keeps its resting slot: extra width is taken back equally on both sides, so it grows from its centre */
+      var half = (widthAt(L.ch, q) - L.restW) / 2;
+      L.el.style.fontWeight = q;
+      L.el.style.marginInline = (-half).toFixed(4) + 'em';
     });
     if (visible && !D.hidden) raf = requestAnimationFrame(frame);
   }
-  function kick() { if (!raf && S && cfg.on && visible && !D.hidden) raf = requestAnimationFrame(frame); }
+  function kick() { if (!raf && S && cfg.on && visible && !D.hidden) { last = 0; raf = requestAnimationFrame(frame); } }
   function stop() { if (raf) cancelAnimationFrame(raf); raf = 0; }
   function setup() {
     stop();
@@ -3204,7 +3244,8 @@ transform or scale.</span></h1></div></section><section id="b-intro" class="tex 
     if (!split()) return;
     measure(); kick();
   }
-  function remeasure() { if (!S) return; stop(); measure(); kick(); }
+  function remeasureNow() { if (!S) return; stop(); measure(); kick(); }
+  function remeasure() { clearTimeout(mz); mz = setTimeout(remeasureNow, 120); }
 
   if (!reduce) {
     if ('IntersectionObserver' in W) {
@@ -3217,12 +3258,12 @@ transform or scale.</span></h1></div></section><section id="b-intro" class="tex 
       W.addEventListener('pointermove', function (e) { ptr = { x: e.clientX, y: e.clientY }; }, { passive: true });
       D.addEventListener('pointerleave', function () { ptr = null; });
     }
-    W.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(remeasure, 150); });
+    W.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(remeasure, 30); });
     if (D.fonts) {
-      if (D.fonts.ready) D.fonts.ready.then(function () { setTimeout(remeasure, 60); });
-      if (D.fonts.addEventListener) D.fonts.addEventListener('loadingdone', function () { setTimeout(remeasure, 60); });
+      if (D.fonts.ready) D.fonts.ready.then(remeasure);
+      if (D.fonts.addEventListener) D.fonts.addEventListener('loadingdone', remeasure);
     }
-    W.addEventListener('load', function () { setTimeout(remeasure, 60); });
+    W.addEventListener('load', remeasure);
   }
   /* Studio edits: new settings, and the headline may have been re-rendered (splits again) */
   W.addEventListener('message', function (e) {
