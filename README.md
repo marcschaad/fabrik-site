@@ -1,6 +1,6 @@
 # Fabrik Collective site
 
-`index.html` is the whole site, exported from the **Fabrik 2.5 Studio** artifact (https://claude.ai/artifact/NUiit8ozzDNnXZ7uEznFbb) since 2026-10-20. Edit in that Studio; export = read its `site/draft`, run `window.FabrikStudioBuild()` in the Studio page, commit `index.html`, push `main`.
+`index.html` is the whole site, exported from the **Fabrik 2.5 Studio** artifact (https://claude.ai/artifact/NUiit8ozzDNnXZ7uEznFbb) since 2026-10-20. Edit in that Studio and press **Export to site** (two clicks). That fires the "Push Fabrik site (2.5)" scheduled task, which reads the Studio and its `site/draft`, runs `tools/export25.py` (headless Chromium via playwright; the draft is injected into the Studio page and `window.FabrikStudioBuild()` returns the page), commits `index.html` and pushes `main`. Exit 3 = nothing changed.
 
 - Fonts: Fraunces + Jost from Google Fonts. No Adobe kit on the page any more.
 - Keep on every export: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png`, `og.jpg`.
