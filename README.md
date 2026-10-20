@@ -1,5 +1,17 @@
 # Fabrik Collective site
 
+`index.html` is the whole site, exported from the **Fabrik 2.5 Studio** artifact (https://claude.ai/artifact/NUiit8ozzDNnXZ7uEznFbb) since 2026-10-20. Edit in that Studio; export = read its `site/draft`, run `window.FabrikStudioBuild()` in the Studio page, commit `index.html`, push `main`.
+
+- Fonts: Fraunces + Jost from Google Fonts. No Adobe kit on the page any more.
+- Keep on every export: `CNAME`, `.nojekyll`, `robots.txt`, `favicon.svg`, `favicon-32.png`, `apple-touch-icon.png`, `og.jpg`.
+- Live at fabrikcollective.com (GitHub Pages, CNAME file). No `noindex`.
+- `tools/export_site.py` and the "Push Fabrik site" scheduled task belong to the retired 2.0 Studio (Arsenica, Studio draft at artifact FtB2o9Sj2PHNB1yMk7Semp). Do not run them against this site; they would overwrite it with the 2.0 export.
+
+---
+Previous README (2.0 Studio era):
+
+# Fabrik Collective site
+
 Static export of the Fabrik Site Studio draft. `index.html` is the whole site (styles, renderer and content inline).
 
 - Edit content in the Studio, then press **Export to site** (two clicks: it asks first). That fires the "Push Fabrik site" scheduled task, which reads the Studio and its draft, runs `tools/export_site.py`, and commits and pushes `index.html`. Progress shows in the Studio bar (from the Studio's `site/publish` document). **Download** in the Studio still saves the file by hand.
